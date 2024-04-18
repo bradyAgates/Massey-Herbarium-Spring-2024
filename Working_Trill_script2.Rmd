@@ -1,0 +1,238 @@
+---
+title: "GBIF test script"
+author: "Brady Gates"
+date: "09/18/2023"
+output: word_document
+---
+
+sets up R workspace and loads packages
+
+```{r}
+
+#clears workspace
+rm(list=ls())
+
+#sets working directory
+setwd("C:/maxent")
+
+#ensures java (jvm.dll) can be found
+Sys.setenv(JAVA_HOME='/Library/Internet Plug-Ins/JavaAppletPlugin.plugin/Contents/Home/')
+require(rJava)
+
+#gives more memory to java to run bigger models
+options(java.parameters = "-Xmx5g")
+
+#loads in necessary packages
+library("dismo")
+library("usdm")
+library("dplyr")
+
+```
+```{r}
+install.packages("dismo")
+install.packages("usdm")
+install.packages("dpylr")
+
+```
+
+
+```{r}
+install.packages("raster")
+library("raster")
+```
+
+function to stack all rasters in an indicated directory
+
+```{r}
+
+stack_folder = function(filepath) {
+  
+  #gets filepaths of all the tif files in the given folder
+  tifdata = list.files(path=filepath, pattern="*.tif")
+  filepaths = paste(filepath, tifdata, sep="")
+
+  #stacks all tif files
+  wcrasters = stack(filepaths)
+  
+}
+
+```
+
+function to combine two "wrap-around" rasters
+note that the final raster will have extent_a on the left and extent_b on the right
+also, extent_a and extent_b should have the same y dimensions
+in our case, creates a new raster from worldclim data that continually goes from Asia to North America
+
+```{r}
+
+raster_wrap_comb = function(extent_a, extent_b, raster) {
+  
+  #creates new extents based off a and b
+  ea_shift = extent(0, extent_a[2]-extent_a[1], extent_a[3], extent_a[4])
+  eb_shift = extent(ea_shift[2], ea_shift[2]+(extent_b[2]-extent_b[1]), extent_b[3], extent_b[4])
+  
+  #crops the raster to the extent and sets new extents
+  ea_crop = setExtent(crop(raster, extent_a), ea_shift, keepres=FALSE, snap=FALSE)
+  eb_crop = setExtent(crop(raster, extent_b), eb_shift, keepres=FALSE, snap=FALSE)
+
+  #return merged rasters
+  merge(ea_crop, eb_crop)
+  
+}
+
+```
+
+loads in presence data
+
+```{r}
+
+#loads in presence data (collected from gbif) 
+setwd("C:/maxent/")
+occurence = read.csv("C:/maxent/DIVI Cleaned.csv")
+
+#use head to ensure data looks ok
+head(occurence)
+
+#trims to just latitude and longitude and
+#use head to ensure data is just xy-coordinates 
+#should be two coordinates listed as (lon, lat)
+occurence = occurence[c("decimalLongitude", "decimalLatitude")]
+head(occurence)
+
+```
+
+loads in climate data
+
+```{r}
+
+#gets present climate data directly from worldclim
+wccurr = getData('worldclim', var='bio', res=2.5)
+#cclgmbi_2-5m/
+
+#gets lgm and future projection rasters from file
+wclgm = stack_folder("C:/maxent/sangmodels/cclgmbi_2-5m/")
+wcrcp85 = stack_folder("C:/maxent/sangmodels/cc85bi70/")
+wcrcp60 = stack_folder("C:/maxent/sangmodels/cc60bi70/")
+wcrcp45 = stack_folder("C:/maxent/sangmodels/cc45bi70/")
+wcrcp26 = stack_folder("C:/maxent/sangmodels/cc26bi70/")
+
+#extract current conditions at occurence points
+wccurr_vals = extract(wccurr, occurence, cellnumbers=TRUE)
+
+#removes duplicated rows from occurence data
+occ_distinct = subset(distinct(na.omit(cbind(as.data.frame(wccurr_vals), occurence)), cells, .keep_all= TRUE), select=-c(1:20))
+
+#removes duplicated rows from extracted values
+wccurr_distinct = subset(distinct(na.omit(as.data.frame(wccurr_vals)), cells, .keep_all= TRUE), select=-c(cells))
+
+#uses VIF to exclude correllated variables with a threshold of 10
+vcurr = exclude(wccurr_distinct, vifstep(wccurr_distinct, th=10))
+
+#gets only uncorrellated rasters
+wccurr_uncorr = subset(wccurr, colnames(vcurr))
+wclgm_uncorr = subset(wclgm, colnames(vcurr))
+wcrcp85_uncorr = subset(wcrcp85, colnames(vcurr))
+wcrcp60_uncorr = subset(wcrcp60, colnames(vcurr))
+wcrcp45_uncorr = subset(wcrcp45, colnames(vcurr))
+wcrcp26_uncorr = subset(wcrcp26, colnames(vcurr))
+
+#ensures all names match up
+print(rbind(colnames(vcurr), names(wccurr_uncorr), names(wclgm_uncorr), names(wcrcp85_uncorr), names(wcrcp60_uncorr), names(wcrcp45_uncorr), names(wcrcp26_uncorr)))
+
+#set the extent for prediction
+#e_asia = extent(50, 180, 15, 80) #not needed for Virginia can remove lines 129-163
+#e_namerica = extent(-180, -70, 15, 80) #not needed for Virginia
+#olivia change these values to the long/lat cutoff values for sampling: CHANGED on 2/3/22
+e_Virginia = extent(-97.0000,-64.0000,25.0000,50.0000)
+
+#creates new masked rasters for each based on extent
+#wccurr_masked = raster_wrap_comb(e_asia, e_namerica, wccurr_uncorr)
+#wclgm_masked = raster_wrap_comb(e_asia, e_namerica, wclgm_uncorr)
+#wcrcp85_masked = raster_wrap_comb(e_asia, e_namerica, wcrcp85_uncorr)
+#wcrcp60_masked = raster_wrap_comb(e_asia, e_namerica, wcrcp60_uncorr)
+#wcrcp45_masked = raster_wrap_comb(e_asia, e_namerica, wcrcp45_uncorr)
+#wcrcp26_masked = raster_wrap_comb(e_asia, e_namerica, wcrcp26_uncorr)
+
+#changes longitudes to match new extent
+#occ_masked = occ_distinct
+
+#for (i in 1:length(occ_masked$Longitude)) {
+  
+  #case for points in e_asia
+# if (occ_masked$Longitude[i] >= e_asia[1]) {
+    
+ #   occ_masked$Longitude[i] = occ_masked$Longitude[i] - e_asia[1]
+#  }
+  
+  #case for points in e_namerica
+ # else if (occ_masked$Longitude[i] <= e_namerica[2]) {
+    
+ #   occ_masked$Longitude[i] = occ_masked$Longitude[i] + 180 + (e_asia[2] - e_asia[1])
+ # }
+#}
+
+#creates new extent of current range masked
+#e_curr_range_masked = extent(min(occ_masked$Longitude) - 1, max(occ_masked$Longitude) + 1, min(occ_masked$Latitude) - 1, max(occ_masked$Latitude) + 1)
+
+#exports masked occurence points, check file path
+write.csv(occ_distinct, "C:/maxent/sangmodels/occ_masked_DRtest.csv")
+#not sure what file I should replace this with- OM 2/3/22
+
+```
+
+runs projections 
+
+```{r}
+
+#ensures java is located for maxent
+system.file("java", package="dismo")
+file.copy("Maxent3.4.1/maxent.jar", "/Library/Frameworks/R.framework/Versions/3.0/Resources/library/dismo/java/maxent.jar")
+jar <- paste(system.file(package="dismo"), "/java/maxent.jar", sep='')
+
+#training and testing presence data, for Virginia replace "_masked" with "_distinct"
+fold = kfold(occ_distinct, 5)
+occtest = occ_distinct[fold == 1,]
+occtrain = occ_distinct[fold != 1,]
+
+#generates background samples, for Virginia change "_masked" to "_uncorr" and extent to VA variable
+bg = randomPoints(wccurr_uncorr, n=1000, ext=e_Virginia)
+
+#maxent with background samples
+#parameters for maxent may need to be tweaked, for Virginia change "_masked" to "_uncorr"
+mx = maxent(wccurr_uncorr, occtrain, a=bg, removeDuplicates=TRUE, args=c("-J") , path="C:/maxent/sangmodels/mxoutBR",)
+
+plot(mx)
+
+#predict and plot; for Virginia replace all "_masked" with "_uncorr"
+modelcurr = predict(mx, wccurr_uncorr, ext=wccurr_uncorr, filename="C:/maxent/sangmodels/mxoutBR/BR_modelcurr.asc", overwrite=TRUE, progress='text')
+modellgm = predict(mx, wclgm_uncorr, ext=wclgm_uncorr, filename="C:/maxent/sangmodels/mxoutBR/BR_modellgm.asc", overwrite=TRUE, progress='text')
+modelrcp85 = predict(mx, wcrcp85_uncorr, ext=wcrcp85_uncorr, filename="C:/maxent/sangmodels/mxoutBR/BR_modelrcp85.asc", overwrite=TRUE, progress='text')
+modelrcp60 = predict(mx, wcrcp60_uncorr, ext=wcrcp60_uncorr, filename="C:/maxent/sangmodels/mxoutBR/BR_modelrcp60.asc", overwrite=TRUE, progress='text')
+modelrcp45 = predict(mx, wcrcp45_uncorr, ext=wcrcp45_uncorr, filename="C:/maxent/sangmodels/mxoutBR/BR_modelrcp45.asc", overwrite=TRUE, progress='text')
+modelrcp26 = predict(mx, wcrcp26_uncorr, ext=wcrcp26_uncorr, filename="C:/maxent/sangmodels/mxoutBR/BR_modelrcp26.asc", overwrite=TRUE, progress='text')
+
+#evaluates model, for Virginia change "_masked" to "_uncorr"
+meval = evaluate(mx, p=occtest, a=bg, x=wccurr_uncorr)
+```
+
+```{r}
+#gets threshold from model evaluation
+#if using max sum of sensitivity and specificity, use spec_sens value
+library(readr)
+
+write_csv(threshold(meval), "C:/maxent/DIVI.csv")
+
+# puts rasters in folder
+writeRaster(modelcurr,'C:\\maxent\\BR_rasters/DIVImodelcurr2.tif', overwrite=TRUE)
+writeRaster(modellgm,'C:\\maxent\\BR_rasters/DIVImodellgm2.tif', overwrite=TRUE)
+writeRaster(modelrcp85,'C:\\maxent\\BR_rasters/DIVImodelrcp852.tif', overwrite=TRUE)
+writeRaster(modelrcp60,'C:\\maxent\\BR_rasters/DIVImodelrcp602.tif', overwrite=TRUE)
+writeRaster(modelrcp45,'C:\\maxent\\BR_rasters/DIVImodelrcp452.tif', overwrite=TRUE)
+writeRaster(modelrcp26,'C:\\maxent\\BR_rasters/DIVImodelrcp262.tif', overwrite=TRUE)
+
+```
+
+
+
+
+
