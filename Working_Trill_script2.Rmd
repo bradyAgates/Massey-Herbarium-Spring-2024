@@ -1,5 +1,5 @@
 ---
-title: "GBIF test script"
+title: "Spring 2024 ENM research script"
 author: "Brady Gates"
 date: "09/18/2023"
 output: word_document
